@@ -15,6 +15,7 @@
   - **`UpdateBehavior: UPDATE_IN_DATABASE`** so new columns (schema drift) automatically propagate into the Glue catalog.
   - **`DeleteBehavior: DEPRECATE_IN_DATABASE`** so removed source tables are flagged but not destroyed.
   - **`RecrawlBehavior: CRAWL_EVERYTHING`** to ensure existing partitions are re-classified when schemas change.
+  - Glue crawlers fail on CSVs when the data contains commas. To get around this a custom classifier can be used to ensure commas inside quotation marks `","` are not treated as a delimiter
 - Starts the crawler and waits synchronously for it to finish so downstream consumers see updated catalog state by the time the DAG run completes.
 
 **Net effect**

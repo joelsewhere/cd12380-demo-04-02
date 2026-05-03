@@ -1,5 +1,6 @@
+import json
 import pendulum
-from airflow.sdk import DAG, task
+from airflow.sdk import DAG, task, Param
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.amazon.aws.hooks.glue_crawler import GlueCrawlerHook
 
@@ -14,41 +15,40 @@ REGION         = "us-east-1"
 
 with DAG(
     dag_id="glue_crawler",
-    schedule="@daily",
-    start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
-    end_date=pendulum.datetime(2026, 1, 2, tz="UTC"),
-    catchup=True,
     max_active_runs=1,
     max_active_tasks=1,
+    params={
+        'Interval': Param('2026-01-01', type=['string'], enum=['2026-01-01', '2026-01-02'])
+    }
 ) as dag:
 
     @task
-    def capture_landing_keys(ds) -> list[str]:
+    def capture_landing_keys(s3_bucket, params):
         
         s3 = S3Hook(aws_conn_id=AWS_CONN_ID)
         
         found_prefixes = set()
 
         prefixes = s3.list_prefixes(
-            bucket_name=S3_BUCKET,
+            bucket_name=s3_bucket,
             prefix=LANDING_PREFIX,
             delimiter='/'
             )
 
         for prefix in prefixes:
             # Assuming structure: landing/table_name/ingested_date=YYYY-MM-DD/file
-            ingestion_prefix = f"{prefix}ingested_date={ds}/"
+            ingestion_prefix = f"{prefix}ingested_date={params['Interval']}/"
             print(ingestion_prefix)
-            for key in s3.list_keys(bucket_name=S3_BUCKET, prefix=ingestion_prefix):
+            for key in s3.list_keys(bucket_name=s3_bucket, prefix=ingestion_prefix):
                 parts = key.split('/')
                 # Point the crawler landing/table_name/
-                schema_table_path = f"s3://{S3_BUCKET}/{parts[0]}/{parts[1]}/"
+                schema_table_path = f"s3://{s3_bucket}/{parts[0]}/{parts[1]}/"
                 found_prefixes.add(schema_table_path)
             
         return list(found_prefixes)
 
     @task.short_circuit
-    def upsert_crawler(landing_prefixes: list[str]) -> None:
+    def upsert_crawler(landing_prefixes: list[str]):
         if not landing_prefixes:
             return False
         
@@ -57,12 +57,12 @@ with DAG(
 
         schema_policy = {
                     "UpdateBehavior": "UPDATE_IN_DATABASE",    # Auto evolve schema
-                    "DeleteBehavior": "DEPRECATE_IN_DATABASE"  # or "LOG" to keep it safe
+                    "DeleteBehavior": "DEPRECATE_IN_DATABASE",  # or "LOG" to keep it safe
                     }
         
         recrawl_policy = {"RecrawlBehavior": "CRAWL_EVERYTHING"} # Required for updating schemas
         
-        
+
         if hook.has_crawler(CRAWLER_NAME):
 
             hook.update_crawler(
@@ -70,6 +70,7 @@ with DAG(
                 Targets={"S3Targets": targets}, # Point the crawler to updated list of tables
                 SchemaChangePolicy=schema_policy,
                 RecrawlPolicy=recrawl_policy,
+                Classifiers=["csv_classifier"],
                 )
         else:
             hook.create_crawler(
@@ -79,15 +80,16 @@ with DAG(
                 Targets={"S3Targets": targets},
                 SchemaChangePolicy=schema_policy,
                 RecrawlPolicy=recrawl_policy,
+                Classifiers=["csv_classifier"],
                 )
         
         return True
 
     @task
-    def run_crawler() -> None:
+    def run_crawler():
         hook = GlueCrawlerHook(aws_conn_id=AWS_CONN_ID, region_name=REGION)
         hook.start_crawler(CRAWLER_NAME)
         hook.wait_for_crawler_completion(CRAWLER_NAME)
 
-    prefixes = capture_landing_keys()
+    prefixes = capture_landing_keys(S3_BUCKET)
     upsert_crawler(prefixes) >> run_crawler()
