@@ -3,7 +3,7 @@ from airflow.sdk import DAG, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.amazon.aws.hooks.glue_crawler import GlueCrawlerHook
 
-S3_BUCKET      = "l4-lakehouse-dev-753900908173"
+S3_BUCKET      = "{{ var.value.s3_bucket }}"
 LANDING_PREFIX = "landing/"
 GLUE_DB        = "raw"
 WAREHOUSE_PATH = f"s3://{S3_BUCKET}/iceberg-warehouse/"
@@ -14,11 +14,12 @@ REGION         = "us-east-1"
 
 with DAG(
     dag_id="glue_crawler",
-    max_active_runs=1,
     schedule="@daily",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     end_date=pendulum.datetime(2026, 1, 2, tz="UTC"),
     catchup=True,
+    max_active_runs=1,
+    max_active_tasks=1,
 ) as dag:
 
     @task
